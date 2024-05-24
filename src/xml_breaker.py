@@ -76,5 +76,5 @@ class XmlBreaker:
                 self.logger.info(
                     f"{len(element.getchildren())} records in element {element}."
                 )
-            xmls.append(element.getroottree())
+            xmls.append(element.getroottree().__deepcopy__(memo={}))
         return xmls
