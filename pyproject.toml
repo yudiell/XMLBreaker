@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "xmlbreaker"
+version = "0.1.0"
+description = "Breaks a large XML into multiple XMLs"
+authors = ["Yudiell Hernandez <yudiell@outlook.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+lxml = "^5.2.2"
+logbook = "^1.7.0.post0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
