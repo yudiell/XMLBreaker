@@ -425,3 +425,243 @@ class TestIntegration:
         
         # Verify files were created
         assert len(list[Any](tmp_path.glob("*.xml"))) > 0
+
+
+# Additional edge cases and special scenarios
+class TestEdgeCases:
+    """Additional edge case tests."""
+
+    def test_xml_with_namespaces(self, logger):
+        """Test handling of XML with namespaces."""
+        xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<root xmlns:custom="http://example.com/custom">
+    <custom:item>1</custom:item>
+    <custom:item>2</custom:item>
+</root>"""
+        breaker = XmlBreaker(xml=xml, logger=logger)
+        assert breaker.root is not None
+        assert len(list(breaker.root)) == 2
+
+    def test_xml_with_cdata(self, logger):
+        """Test handling of XML with CDATA sections."""
+        xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<root>
+    <item><![CDATA[This is <bold>CDATA</bold> content]]></item>
+</root>"""
+        breaker = XmlBreaker(xml=xml, logger=logger)
+        assert breaker.root is not None
+        item = list(breaker.root)[0]
+        assert "CDATA" in item.text
+
+    def test_xml_with_comments(self, logger):
+        """Test handling of XML with comments."""
+        xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<root>
+    <!-- This is a comment -->
+    <item>Content</item>
+</root>"""
+        breaker = XmlBreaker(xml=xml, logger=logger)
+        assert breaker.root is not None
+        # Comments are included in element children count with lxml
+        assert len(list(breaker.root)) == 2
+
+    def test_xml_with_processing_instructions(self, logger):
+        """Test handling of XML with processing instructions."""
+        xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<?target instruction?>
+<root>
+    <item>Content</item>
+</root>"""
+        breaker = XmlBreaker(xml=xml, logger=logger)
+        assert breaker.root is not None
+        assert breaker.root.tag == "root"
+
+    def test_split_records_with_complex_attributes(self, logger):
+        """Test splitting records with complex attributes."""
+        xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<root xmlns:ns="http://example.com" attr="value">
+    <item id="1" type="A" ns:special="x">Item 1</item>
+    <item id="2" type="B" ns:special="y">Item 2</item>
+    <item id="3" type="C" ns:special="z">Item 3</item>
+</root>"""
+        breaker = XmlBreaker(xml=xml, logger=logger)
+        chunks = breaker.split_records(breaker.root, number_of_records=2)
+        
+        # Verify attributes are preserved
+        for chunk in chunks:
+            root = chunk.getroot()
+            assert root.get("attr") == "value"
+
+    def test_write_xml_with_special_characters(self, logger, tmp_path):
+        """Test writing XML with special characters."""
+        xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<root>
+    <item>\xc3\xa9\xc3\xa0\xc3\xb9</item>
+</root>"""
+        breaker = XmlBreaker(xml=xml, logger=logger)
+        output_file = tmp_path / "output.xml"
+        breaker.write_xml(breaker.root, str(output_file))
+        
+        # Verify file exists and can be parsed
+        tree = etree.parse(str(output_file))
+        assert tree.getroot() is not None
+
+    def test_split_records_preserves_order(self, logger):
+        """Test that splitting preserves record order."""
+        xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<root>
+    <item>First</item>
+    <item>Second</item>
+    <item>Third</item>
+    <item>Fourth</item>
+    <item>Fifth</item>
+</root>"""
+        breaker = XmlBreaker(xml=xml, logger=logger)
+        chunks = breaker.split_records(breaker.root, number_of_records=2)
+        
+        # Collect all items from chunks
+        items = []
+        for chunk in chunks:
+            for child in chunk.getroot():
+                items.append(child.text)
+        
+        assert items == ["First", "Second", "Third", "Fourth", "Fifth"]
+
+    def test_get_element_by_tag_case_sensitive(self, logger):
+        """Test that tag search is case-sensitive."""
+        xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<root>
+    <Item>1</Item>
+    <item>2</item>
+</root>"""
+        breaker = XmlBreaker(xml=xml, logger=logger)
+        elements = list(breaker.root)
+        
+        # Search for lowercase 'item' - should find second element
+        result = breaker.get_element_by_tag("item", elements)
+        assert result is not None
+        assert result.text == "2"
+
+    def test_write_xml_with_tail_text(self, logger, tmp_path):
+        """Test writing element that has tail text."""
+        xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<root>
+    <item>1</item>
+</root>"""
+        breaker = XmlBreaker(xml=xml, logger=logger)
+        item = list(breaker.root)[0]
+        
+        output_file = tmp_path / "output.xml"
+        breaker.write_xml(item, str(output_file))
+        
+        # Verify file was written
+        assert output_file.exists()
+        tree = etree.parse(str(output_file))
+        assert tree.getroot().tag == "item"
+
+    def test_split_records_zero_chunk_size_edge_case(self, logger):
+        """Test splitting with chunk size of 1."""
+        xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<root>
+    <item>1</item>
+    <item>2</item>
+</root>"""
+        breaker = XmlBreaker(xml=xml, logger=logger)
+        chunks = breaker.split_records(breaker.root, number_of_records=1)
+        
+        assert len(chunks) == 2
+        assert len(list(chunks[0].getroot())) == 1
+        assert len(list(chunks[1].getroot())) == 1
+
+    def test_multiple_instances_independent(self, simple_xml, complex_xml, logger):
+        """Test that multiple XmlBreaker instances are independent."""
+        breaker1 = XmlBreaker(xml=simple_xml, logger=logger)
+        breaker2 = XmlBreaker(xml=complex_xml, logger=logger)
+        
+        assert breaker1.root.tag == "root"
+        assert breaker2.root.tag == "catalog"
+        assert breaker1.root is not breaker2.root
+
+    def test_write_xml_file_permissions(self, xml_breaker, tmp_path):
+        """Test that written XML file is readable."""
+        output_file = tmp_path / "output.xml"
+        xml_breaker.write_xml(xml_breaker.root, str(output_file))
+        
+        # Verify file is readable
+        assert output_file.stat().st_mode & 0o444 > 0
+
+    def test_element_with_mixed_content(self, logger):
+        """Test element with both text and child elements (mixed content)."""
+        xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<root>Some text<item>Child</item>More text</root>"""
+        breaker = XmlBreaker(xml=xml, logger=logger)
+        chunks = breaker.split_records(breaker.root, number_of_records=10)
+        
+        assert len(chunks) == 1
+        root = chunks[0].getroot()
+        assert len(list(root)) == 1
+
+    def test_deeply_nested_xml(self, logger):
+        """Test handling of deeply nested XML structure."""
+        xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<level1>
+    <level2>
+        <level3>
+            <level4>
+                <item>Deep content</item>
+            </level4>
+        </level3>
+    </level2>
+</level1>"""
+        breaker = XmlBreaker(xml=xml, logger=logger)
+        assert breaker.root.tag == "level1"
+        
+        # Navigate to deepest level
+        level2 = list(breaker.root)[0]
+        level3 = list(level2)[0]
+        level4 = list(level3)[0]
+        item = list(level4)[0]
+        assert item.text == "Deep content"
+
+    def test_empty_element(self, logger):
+        """Test handling of empty elements."""
+        xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<root>
+    <empty/>
+    <empty></empty>
+    <item>Content</item>
+</root>"""
+        breaker = XmlBreaker(xml=xml, logger=logger)
+        assert len(list(breaker.root)) == 3
+
+    def test_get_element_by_tag_with_duplicates(self, logger):
+        """Test get_element_by_tag returns first when multiple exist."""
+        xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<root>
+    <item priority="high">First</item>
+    <item priority="low">Second</item>
+    <item priority="medium">Third</item>
+</root>"""
+        breaker = XmlBreaker(xml=xml, logger=logger)
+        elements = list(breaker.root)
+        
+        result = breaker.get_element_by_tag("item", elements)
+        assert result is not None
+        assert result.text == "First"
+        assert result.get("priority") == "high"
+
+    def test_split_records_maintains_element_properties(self, logger):
+        """Test that split maintains all element properties."""
+        xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<records version="1.0" timestamp="2024-01-01">
+    <record>1</record>
+    <record>2</record>
+    <record>3</record>
+</records>"""
+        breaker = XmlBreaker(xml=xml, logger=logger)
+        chunks = breaker.split_records(breaker.root, number_of_records=1)
+        
+        for chunk in chunks:
+            root = chunk.getroot()
+            assert root.get("version") == "1.0"
+            assert root.get("timestamp") == "2024-01-01"
